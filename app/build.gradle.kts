@@ -3,6 +3,12 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     id("kotlin-kapt")
+    id("com.google.gms.google-services")
+  //  id("com.android.application")
+ //   id("com.android.library")
+  //  id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.kapt")
+    id("com.google.firebase.appdistribution")
 }
 
 android {
@@ -90,5 +96,20 @@ dependencies {
 
     // Paging (If needed for large Room queries)
     implementation("androidx.paging:paging-runtime:3.2.1")
-}
+    implementation("androidx.compose.material:material-icons-extended:1.5.4")
 
+    // Firebase BoM (Bill of Materials) to manage versions
+    implementation(platform("com.google.firebase:firebase-bom:33.11.0"))
+    // Firebase Authentication
+    implementation ("com.google.firebase:firebase-auth-ktx")
+
+    // Firebase Firestore
+    implementation ("com.google.firebase:firebase-firestore-ktx")
+
+    // Optional: Firebase Analytics (if needed)
+    implementation("com.google.firebase:firebase-analytics")
+    // Navigation Component for Jetpack Compose
+    implementation("androidx.navigation:navigation-compose:2.7.7")
+    implementation("com.google.firebase:firebase-auth-ktx:22.3.1")
+    implementation("com.google.android.gms:play-services-auth:20.7.0")
+}

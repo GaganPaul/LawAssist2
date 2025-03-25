@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "381332612766",
+    "project_id": "lawassist-b4361",
+    "storage_bucket": "lawassist-b4361.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:381332612766:android:e4193049d698a5e51fbd8f",
+        "android_client_info": {
+          "package_name": "com.example.lawassist"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "381332612766-3bqi461r1j410nubb6238mqhoik4b3vt.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.lawassist",
+            "certificate_hash": "2988215391c40aa4f5db38d9838cfbcf778c411f"
+          }
+        },
+        {
+          "client_id": "381332612766-73v27fl53d0u163eo2dd8tf2n018cm0q.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBmWMnt-KaaMd7fy-DF-aUJ_ARVfkXXJ-4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "381332612766-73v27fl53d0u163eo2dd8tf2n018cm0q.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

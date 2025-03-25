@@ -5,6 +5,10 @@
     <!-- Add the Internet Permission -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -15,6 +19,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Lawassist"
         tools:targetApi="31">
+        <service android:name="android.speech.RecognitionService" />
 
         <activity
             android:name=".MainActivity"

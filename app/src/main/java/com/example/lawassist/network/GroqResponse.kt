@@ -1,16 +1,33 @@
-package com.example.lawassist.model
+package com.example.lawassist.network
 
 import com.google.gson.annotations.SerializedName
 
 data class GroqResponse(
-    @SerializedName("choices") val choices: List<Choice>
+    val id: String?,
+    val objectname: String?,
+    val created: Long?,
+    val model: String?,
+    val choices: List<Choice>?,
+    val usage: Usage?
 )
 
 data class Choice(
-    @SerializedName("message") val message: Message
+    val index: Int?,
+    val message: ChoiceMessage,
+    @SerializedName("finish_reason")
+    val finishReason: String?
 )
 
-data class Message(
-    @SerializedName("role") val role: String,
-    @SerializedName("content") val content: String
+data class ChoiceMessage(
+    val role: String?,
+    val content: String?
+)
+
+data class Usage(
+    @SerializedName("prompt_tokens")
+    val promptTokens: Int?,
+    @SerializedName("completion_tokens")
+    val completionTokens: Int?,
+    @SerializedName("total_tokens")
+    val totalTokens: Int?
 )

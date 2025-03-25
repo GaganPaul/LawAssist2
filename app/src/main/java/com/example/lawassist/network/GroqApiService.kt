@@ -1,6 +1,6 @@
 package com.example.lawassist.network
 
-import com.example.lawassist.model.GroqResponse
+import com.example.lawassist.network.GroqResponse
 import com.example.lawassist.network.GroqRequest
 import retrofit2.http.Body
 import retrofit2.http.Headers

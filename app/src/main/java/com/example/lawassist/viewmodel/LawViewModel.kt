@@ -9,8 +9,11 @@ import com.example.lawassist.repository.LawRepository
 import com.example.lawassist.service.FirestoreService
 import com.example.lawassist.repository.GroqRepository
 import com.example.lawassist.database.LawEntity
+import com.example.lawassist.settings.SettingsManager
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.MutableState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 
 class LawViewModel(private val lawRepository: LawRepository) : ViewModel() {
@@ -20,6 +23,9 @@ class LawViewModel(private val lawRepository: LawRepository) : ViewModel() {
 
     private val _lawsList = mutableStateOf<List<LawEntity>>(emptyList())
     val lawsList: MutableState<List<LawEntity>> = _lawsList
+    
+    private val _isLoading = mutableStateOf(false)
+    val isLoading: MutableState<Boolean> = _isLoading
 
     private val groqRepository = GroqRepository()
     private val firestoreService = FirestoreService()
@@ -33,78 +39,47 @@ class LawViewModel(private val lawRepository: LawRepository) : ViewModel() {
         currentUserId = authService.getCurrentUserId()
         println("Current User ID: $currentUserId")
     }
-/*
-    fun registerUser(email: String, password: String, name: String, onResult: (Boolean, String) -> Unit) {
-        viewModelScope.launch {
-            val result = authService.registerUser(email, password, name)
-            if (result.isSuccess) {
-                currentUserId = result.getOrNull()
-                checkUserSession()
-                clearAIResponse() // Clear response on new registration
-                onResult(true, "Registration successful")
-            } else {
-                onResult(false, result.exceptionOrNull()?.message ?: "Unknown error")
-            }
-        }
-    }
 
-    fun loginUser(email: String, password: String, onResult: (Boolean, String) -> Unit) {
-        viewModelScope.launch {
-            val result = authService.loginUser(email, password)
-            if (result.isSuccess) {
-                currentUserId = result.getOrNull()
-                checkUserSession()
-                clearAIResponse() // Clear response on login
-                onResult(true, "Login successful")
-            } else {
-                onResult(false, result.exceptionOrNull()?.message ?: "Unknown error")
-            }
-        }
-    }
-
- */
-/*
-    fun logoutUser(onResult: () -> Unit) {
-        authService.logoutUser()
-        currentUserId = null
-        checkUserSession()
-        clearAIResponse() // Clear response on logout
-        onResult()
-    }
-*/
     // AI Chat Handling
-    fun queryGroqLlama(prompt: String) {
-        if (currentUserId.isNullOrBlank()) {
-            println("Error: currentUserId is null or empty. Cannot save chat.")
-            return
-        }
-
+    suspend fun queryGroqLlama(prompt: String, modelId: String? = null): String {
+        // Always refresh the user ID before making a query
+        checkUserSession()
+        
         if (prompt.isBlank()) {
-            println("Error: Cannot send an empty prompt.")
-            return
+            return "I couldn't understand your message. Please try again with a more detailed question."
         }
 
-        viewModelScope.launch {
-            val response = groqRepository.queryGroqLlama(prompt)
+        _isLoading.value = true
+        
+        try {
+            // Query the AI with the selected model or default
+            val response = withContext(Dispatchers.IO) {
+                // Ensure we're using a valid model ID
+                val actualModelId = if (!modelId.isNullOrBlank()) {
+                    modelId
+                } else {
+                    "llama3-70b-8192" // Fallback to a known working model
+                }
+                
+                println("Using model ID: $actualModelId")
+                groqRepository.queryGroqLlama(prompt, actualModelId)
+            }
 
             if (response.isNotBlank()) {
-                aiResponse.value = response
+                _aiResponse.value = response
+                return response
             } else {
-                aiResponse.value = "No response from AI."
+                val errorMessage = "I couldn't generate a response. Please try rephrasing your question."
+                _aiResponse.value = errorMessage
+                return errorMessage
             }
-
-            try {
-                println("Storing User Message: $prompt")
-                firestoreService.saveChatMessage(currentUserId!!, prompt, "user")
-
-                if (response.isNotBlank()) {
-                    println("Storing AI Response: $response")
-                    firestoreService.saveChatMessage(currentUserId!!, response, "ai")
-                }
-            } catch (e: Exception) {
-                println("Error saving chat messages: ${e.localizedMessage}")
-                e.printStackTrace()
-            }
+        } catch (e: Exception) {
+            val errorMessage = "Error: ${e.message ?: "Unknown error occurred"}"
+            println(errorMessage)
+            _aiResponse.value = "Sorry, I encountered an error. Please try again later."
+            return "Sorry, I encountered an error. Please try again later."
+        } finally {
+            _isLoading.value = false
         }
     }
 
@@ -112,4 +87,3 @@ class LawViewModel(private val lawRepository: LawRepository) : ViewModel() {
         _aiResponse.value = ""
     }
 }
-

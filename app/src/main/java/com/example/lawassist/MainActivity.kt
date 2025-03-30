@@ -1,18 +1,24 @@
 package com.example.lawassist
 
 import android.Manifest
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -20,41 +26,72 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.MicOff
 import androidx.compose.material.icons.outlined.Upload
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.lawassist.database.LawDatabase
+import com.example.lawassist.model.ChatMessage
 import com.example.lawassist.repository.LawRepository
+import com.example.lawassist.service.FirestoreService
+import com.example.lawassist.service.TextToSpeechService
+import com.example.lawassist.settings.SettingsManager
 import com.example.lawassist.ui.theme.LawAssistTheme
+import com.example.lawassist.ui.theme.initializeTheme
+import com.example.lawassist.ui.theme.WelcomeScreen
 import com.example.lawassist.ui.theme.LoginScreen
 import com.example.lawassist.ui.theme.RegisterScreen
+import com.example.lawassist.ui.theme.SettingsScreen
 import com.example.lawassist.viewmodel.LawViewModel
 import com.example.lawassist.viewmodel.LawViewModelFactory
 import com.example.lawassist.viewmodel.VoiceViewModel
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-// Message data class to store chat history
-data class ChatMessage(
-    val content: String,
-    val isFromUser: Boolean,
-    val timestamp: Long = System.currentTimeMillis()
-)
+// Extension function to find activity from context
+fun Context.findActivity(): ComponentActivity? {
+    var context = this
+    while (context is ContextWrapper) {
+        if (context is ComponentActivity) return context
+        context = context.baseContext
+    }
+    return null
+}
+
+// Format timestamp to a readable format
+fun formatTimestamp(timestamp: Long): String {
+    val date = Date(timestamp)
+    val format = SimpleDateFormat("HH:mm", Locale.getDefault())
+    return format.format(date)
+}
 
 class MainActivity : ComponentActivity() {
 
@@ -73,6 +110,10 @@ class MainActivity : ComponentActivity() {
 
     private val auth: FirebaseAuth by lazy { FirebaseAuth.getInstance() }
     private val firestore: FirebaseFirestore by lazy { FirebaseFirestore.getInstance() }
+    private val firestoreService: FirestoreService by lazy { FirestoreService() }
+
+    private lateinit var textToSpeechService: TextToSpeechService
+    private lateinit var settingsManager: SettingsManager
 
     // Permission request launcher
     private val requestPermissionLauncher = registerForActivityResult(
@@ -101,26 +142,31 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Initialize law data at startup
-      //  lawViewModel.getAllLaws()
+        
+        // Initialize text-to-speech service
+        textToSpeechService = TextToSpeechService(this)
+        
+        // Initialize settings manager
+        settingsManager = SettingsManager.getInstance(this)
+        
+        // Initialize theme
+        initializeTheme(this)
 
         setContent {
             LawAssistTheme {
                 val navController = rememberNavController()
-                LaunchedEffect(Unit) {
-                    if (auth.currentUser != null) {
-                        navController.navigate("chat") {
-                            popUpTo("login") { inclusive = true }
-                        }
-                    }
-                }
 
                 // Initialize the chat messages list here to be preserved across navigation
                 val chatMessages = remember { mutableStateListOf<ChatMessage>() }
+
+                // Load chat history when app starts
+                LaunchedEffect(Unit) {
+                    if (auth.currentUser != null) {
+                        loadChatHistory(chatMessages)
+                    }
+                }
 
                 NavigationComponent(
                     navController = navController,
@@ -131,13 +177,148 @@ class MainActivity : ComponentActivity() {
                     voiceViewModel = voiceViewModel,
                     auth = auth,
                     firestore = firestore,
-                    chatMessages = chatMessages
+                    chatMessages = chatMessages,
+                    textToSpeechService = textToSpeechService,
+                    settingsManager = settingsManager,
+                    onDeleteAllChats = { deleteAllChats(chatMessages) }
                 )
             }
         }
     }
-}
 
+    override fun onDestroy() {
+        super.onDestroy()
+        textToSpeechService.shutdown()
+    }
+
+    // Function to load chat history from Firestore
+    private fun loadChatHistory(chatMessages: MutableList<ChatMessage>) {
+        val userId = auth.currentUser?.uid ?: return
+        
+        android.util.Log.d("MainActivity", "Loading chat history for user: $userId")
+        
+        // Show loading indicator
+        val loadingMessage = ChatMessage(
+            userId = "/users/$userId",
+            role = "assistant",
+            text = "Loading chat history...",
+            timestamp = System.currentTimeMillis()
+        )
+        chatMessages.add(loadingMessage)
+        
+        // Simple query without composite index requirements
+        FirebaseFirestore.getInstance().collection("chat_history")
+            .whereEqualTo("userId", "/users/$userId")
+            .get()
+            .addOnSuccessListener { documents ->
+                chatMessages.clear() // Clear existing messages before loading
+                
+                android.util.Log.d("MainActivity", "Found ${documents.size()} chat messages")
+                
+                val tempMessages = mutableListOf<ChatMessage>()
+                
+                for (document in documents) {
+                    val role = document.getString("role") ?: continue
+                    val text = document.getString("text") ?: continue
+                    val userId = document.getString("userId") ?: continue
+                    val timestamp = document.getTimestamp("timestamp")?.toDate()?.time ?: System.currentTimeMillis()
+                    
+                    tempMessages.add(
+                        ChatMessage(
+                            userId = userId,
+                            role = role,
+                            text = text,
+                            timestamp = timestamp
+                        )
+                    )
+                }
+                
+                // Sort messages by timestamp in memory instead of in the query
+                tempMessages.sortBy { it.timestamp }
+                
+                // Add all messages to the chat
+                chatMessages.addAll(tempMessages)
+                
+                // Add welcome message if chat is empty
+                if (chatMessages.isEmpty()) {
+                    chatMessages.add(
+                        ChatMessage(
+                            userId = "/users/$userId",
+                            role = "assistant",
+                            text = "I'm LawAssist, your AI assistant for laws, government schemes, and services in India.",
+                            timestamp = System.currentTimeMillis()
+                        )
+                    )
+                }
+                
+                android.util.Log.d("MainActivity", "Chat history loaded with ${chatMessages.size} messages")
+            }
+            .addOnFailureListener { e ->
+                android.util.Log.e("MainActivity", "Error loading chat history: ${e.message}")
+                
+                // Remove loading message
+                chatMessages.removeAll { it.text == "Loading chat history..." }
+                
+                // Add welcome message if there was an error
+                chatMessages.add(
+                    ChatMessage(
+                        userId = "/users/$userId",
+                        role = "assistant",
+                        text = "I'm LawAssist, your AI assistant for laws, government schemes, and services in India.",
+                        timestamp = System.currentTimeMillis()
+                    )
+                )
+                
+                // Show error toast
+                Toast.makeText(
+                    this,
+                    "Failed to load chat history: ${e.message}",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+    }
+
+    // Function to create a new chat - made public
+    fun createNewChat(chatMessages: MutableList<ChatMessage>) {
+        val userId = auth.currentUser?.uid ?: return
+
+        // Clear existing messages
+        chatMessages.clear()
+
+        // Add welcome message
+        chatMessages.add(
+            ChatMessage(
+                userId = "/users/$userId",
+                role = "assistant",
+                text = "I'm LawAssist, your AI assistant for laws, government schemes, and services in India.",
+                timestamp = System.currentTimeMillis()
+            )
+        )
+    }
+
+    // Function to delete all chats
+    fun deleteAllChats(chatMessages: MutableList<ChatMessage>) {
+        val userId = auth.currentUser?.uid ?: return
+
+        // Clear local messages
+        chatMessages.clear()
+
+        // Add welcome message
+        chatMessages.add(
+            ChatMessage(
+                userId = "/users/$userId",
+                role = "assistant",
+                text = "I'm LawAssist, your AI assistant for laws, government schemes, and services in India.",
+                timestamp = System.currentTimeMillis()
+            )
+        )
+
+        // Launch a coroutine to delete from Firestore
+        lifecycleScope.launch {
+            firestoreService.deleteAllChats("/users/$userId")
+        }
+    }
+}
 @Composable
 fun NavigationComponent(
     navController: NavHostController,
@@ -148,21 +329,30 @@ fun NavigationComponent(
     voiceViewModel: VoiceViewModel,
     auth: FirebaseAuth,
     firestore: FirebaseFirestore,
-    chatMessages: MutableList<ChatMessage>
+    chatMessages: MutableList<ChatMessage>,
+    textToSpeechService: TextToSpeechService,
+    settingsManager: SettingsManager,
+    onDeleteAllChats: () -> Unit
 ) {
-    NavHost(navController = navController, startDestination = "login") {
+    NavHost(navController = navController, startDestination = "welcome") {
+        composable("welcome") {
+            WelcomeScreen(navController)
+        }
+
         composable("login") {
             LoginScreen(
                 navController = navController,
                 onLoginSuccess = {
                     // Reset or refresh viewModel state when logging in
-                   // lawViewModel.getAllLaws()
+                    lawViewModel.checkUserSession()
                 }
             )
         }
+
         composable("register") {
             RegisterScreen(navController)
         }
+
         composable("chat") {
             ModernChatScreen(
                 viewModel = lawViewModel,
@@ -172,13 +362,23 @@ fun NavigationComponent(
                 onVoiceInputStop = onVoiceInputStop,
                 navController = navController,
                 auth = auth,
-                messages = chatMessages
+                messages = chatMessages,
+                textToSpeechService = textToSpeechService,
+                onNewChat = { (navController.context as MainActivity).createNewChat(chatMessages) },
+                onDeleteAllChats = onDeleteAllChats,
+                settingsManager = settingsManager
+            )
+        }
+
+        composable("settings") {
+            SettingsScreen(
+                settingsManager = settingsManager,
+                navController = navController,
+                onDeleteAllChats = onDeleteAllChats
             )
         }
     }
 }
-
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModernChatScreen(
@@ -189,12 +389,21 @@ fun ModernChatScreen(
     onVoiceInputStop: () -> Unit,
     navController: NavHostController,
     auth: FirebaseAuth,
-    messages: MutableList<ChatMessage>
+    messages: MutableList<ChatMessage>,
+    textToSpeechService: TextToSpeechService,
+    onNewChat: () -> Unit,
+    onDeleteAllChats: () -> Unit,
+    settingsManager: SettingsManager
 ) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val aiResponse by viewModel.aiResponse
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
-    val context = LocalContext.current
+
+    // State for drawer
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
 
     // State for the text field
     var userInput by userInputState
@@ -202,141 +411,586 @@ fun ModernChatScreen(
     // Observe voice input status
     val isListening by voiceViewModel.isListening
 
-    // Observe voice input and update the text field
-    LaunchedEffect(Unit) {
-        voiceViewModel.onTextReceived = { recognizedText ->
-            if (recognizedText.isNotEmpty()) {
-                userInput = recognizedText
+    // State for text-to-speech
+    var isSpeaking by remember { mutableStateOf(false) }
 
-                // Automatically send the message after updating the input
-                messages.add(ChatMessage(userInput, true))
-                viewModel.queryGroqLlama(userInput)
-                userInput = ""
+    // State for current chat title
+    var currentChatTitle by remember { mutableStateOf("LawAssist") }
 
-                coroutineScope.launch {
-                    listState.animateScrollToItem(messages.size - 1)
+    // Get font size from settings
+    val currentFontSize by settingsManager.fontSize.collectAsState()
+
+    // State for showing font size controls
+    var showFontSizeControls by remember { mutableStateOf(false) }
+
+    // Get selected model from settings
+    val selectedModel by settingsManager.selectedModel.collectAsState()
+
+    // Observe voice input results
+    LaunchedEffect(voiceViewModel.voiceInputResult.value) {
+        val result = voiceViewModel.voiceInputResult.value
+        if (result.isNotBlank()) {
+            userInput = result
+            voiceViewModel.clearVoiceInputResult()
+            
+            // Automatically send the voice input
+            if (result.isNotBlank()) {
+                // Add user message to chat
+                messages.add(
+                    ChatMessage(
+                        userId = "/users/${auth.currentUser?.uid}",
+                        role = "user",
+                        text = result,
+                        timestamp = System.currentTimeMillis()
+                    )
+                )
+                
+                // Save user message to Firestore
+                val userId = auth.currentUser?.uid
+                if (userId != null) {
+                    val chatMessage = hashMapOf(
+                        "userId" to "/users/$userId",
+                        "role" to "user",
+                        "text" to result,
+                        "timestamp" to Date()
+                    )
+                    
+                    FirebaseFirestore.getInstance().collection("chat_history")
+                        .add(chatMessage)
+                        .addOnSuccessListener {
+                            android.util.Log.d("MainActivity", "User message saved to Firestore")
+                        }
+                        .addOnFailureListener { e ->
+                            android.util.Log.e("MainActivity", "Error saving user message: ${e.message}")
+                        }
                 }
+                
+                // Show loading indicator
+                messages.add(
+                    ChatMessage(
+                        userId = "/users/${auth.currentUser?.uid}",
+                        role = "assistant",
+                        text = "Thinking...",
+                        timestamp = System.currentTimeMillis()
+                    )
+                )
+                
+                // Query AI for response
+                coroutineScope.launch {
+                    try {
+                        val response = viewModel.queryGroqLlama(result, settingsManager.getSelectedModel())
+                        
+                        // Remove loading message
+                        val loadingIndex = messages.indexOfLast { it.text == "Thinking..." }
+                        if (loadingIndex != -1) {
+                            messages.removeAt(loadingIndex)
+                        }
+                        
+                        // Add AI response to messages
+                        messages.add(
+                            ChatMessage(
+                                userId = "/users/${auth.currentUser?.uid}",
+                                role = "assistant",
+                                text = response,
+                                timestamp = System.currentTimeMillis()
+                            )
+                        )
+                        
+                        // Save AI response to Firestore
+                        if (userId != null) {
+                            val aiMessage = hashMapOf(
+                                "userId" to "/users/$userId",
+                                "role" to "assistant",
+                                "text" to response,
+                                "timestamp" to Date()
+                            )
+                            
+                            FirebaseFirestore.getInstance().collection("chat_history")
+                                .add(aiMessage)
+                                .addOnSuccessListener {
+                                    android.util.Log.d("MainActivity", "AI response saved to Firestore")
+                                }
+                                .addOnFailureListener { e ->
+                                    android.util.Log.e("MainActivity", "Error saving AI response: ${e.message}")
+                                }
+                        }
+                    } catch (e: Exception) {
+                        // Remove loading message
+                        val loadingIndex = messages.indexOfLast { it.text == "Thinking..." }
+                        if (loadingIndex != -1) {
+                            messages.removeAt(loadingIndex)
+                        }
+                        
+                        // Show error message
+                        Toast.makeText(
+                            context,
+                            "Error: ${e.message}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        
+                        // Add error message to chat
+                        messages.add(
+                            ChatMessage(
+                                userId = "/users/${auth.currentUser?.uid}",
+                                role = "assistant",
+                                text = "Sorry, I encountered an error. Please try again later.",
+                                timestamp = System.currentTimeMillis()
+                            )
+                        )
+                    }
+                }
+                
+                // Clear the input field
+                userInput = ""
             }
         }
     }
 
-    // Add initial greeting message if chat is empty
-    LaunchedEffect(Unit) {
-        if (messages.isEmpty()) {
-            messages.add(
-                ChatMessage(
-                    "I'm LawAssist, your AI assistant for laws, government schemes, and services in India.",
-                    false
-                )
-            )
-        }
-    }
-
-    // Process AI response and scroll to latest message
-    LaunchedEffect(aiResponse) {
-        if (aiResponse.isNotEmpty() && !messages.any { !it.isFromUser && it.content == aiResponse }) {
-            messages.add(ChatMessage(aiResponse, false))
+    // Scroll to bottom when new message is added
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
             coroutineScope.launch {
                 listState.animateScrollToItem(messages.size - 1)
             }
         }
     }
 
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+    // Update speaking state
+    LaunchedEffect(textToSpeechService.isSpeaking) {
+        isSpeaking = textToSpeechService.isSpeaking
+    }
+
+    // Simpler approach to handle back button press
+    val onBackPressedCallback = remember {
+        object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (drawerState.isOpen) {
+                    scope.launch {
+                        drawerState.close()
+                    }
+                } else {
+                    isEnabled = false
+                    context.findActivity()?.onBackPressedDispatcher?.onBackPressed()
+                    isEnabled = true
+                }
+            }
+        }
+    }
+
+    // Register the callback
+    DisposableEffect(Unit) {
+        val activity = context.findActivity()
+        activity?.onBackPressedDispatcher?.addCallback(onBackPressedCallback)
+        onDispose {
+            onBackPressedCallback.remove()
+        }
+    }
+
+    Scaffold(
+        topBar = {
             TopAppBar(
-                title = { Text("Law Assist", style = MaterialTheme.typography.headlineSmall) },
+                title = {
+                    Text(
+                        text = "LawAssist",
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = MaterialTheme.typography.titleLarge.fontSize * currentFontSize
+                        )
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        Icon(
+                            imageVector = Icons.Default.Menu,
+                            contentDescription = "Menu"
+                        )
+                    }
+                },
+                actions = {
+                    // Font size controls toggle
+                    IconButton(onClick = { showFontSizeControls = !showFontSizeControls }) {
+                        Icon(
+                            imageVector = Icons.Default.FormatSize,
+                            contentDescription = "Font Size"
+                        )
+                    }
+
+                    // Model selection info
+                    Box {
+                        IconButton(onClick = { navController.navigate("settings") }) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Model Info"
+                            )
+                        }
+
+                        Text(
+                            text = selectedModel.split("-").firstOrNull() ?: "LLaMA",
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 4.dp)
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
-                ),
-                actions = {
-                    TextButton(
-                        onClick = {
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        },
+        bottomBar = {
+            Column {
+                // Font size controls
+                if (showFontSizeControls) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        elevation = CardDefaults.cardElevation(
+                            defaultElevation = 2.dp
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    settingsManager.decreaseFontSize()
+                                },
+                                enabled = currentFontSize > SettingsManager.MIN_FONT_SIZE
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Remove,
+                                    contentDescription = "Decrease font size",
+                                    tint = if (currentFontSize > SettingsManager.MIN_FONT_SIZE)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                )
+                            }
+
+                            Text(
+                                text = "Font Size: ${String.format("%.1f", currentFontSize)}x",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+
+                            IconButton(
+                                onClick = {
+                                    settingsManager.increaseFontSize()
+                                },
+                                enabled = currentFontSize < SettingsManager.MAX_FONT_SIZE
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = "Increase font size",
+                                    tint = if (currentFontSize < SettingsManager.MAX_FONT_SIZE)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                )
+                            }
+                        }
+                    }
+                }
+                // Chat input bar
+                ChatInputBar(
+                    userInput = userInput,
+                    onUserInputChange = { userInput = it },
+                    onMessageSent = {
+                        if (userInput.isNotBlank()) {
+                            // Add user message to chat
+                            val userMessage = ChatMessage(
+                                userId = "/users/${auth.currentUser?.uid}",
+                                role = "user",
+                                text = userInput,
+                                timestamp = System.currentTimeMillis()
+                            )
+                            messages.add(userMessage)
+                            
+                            // Save user message to Firestore
+                            val userId = auth.currentUser?.uid
+                            if (userId != null) {
+                                val chatMessage = hashMapOf(
+                                    "userId" to "/users/$userId",
+                                    "role" to "user",
+                                    "text" to userInput,
+                                    "timestamp" to Date()
+                                )
+                                
+                                FirebaseFirestore.getInstance().collection("chat_history")
+                                    .add(chatMessage)
+                                    .addOnSuccessListener {
+                                        android.util.Log.d("MainActivity", "User message saved to Firestore with ID: ${it.id}")
+                                    }
+                                    .addOnFailureListener { e ->
+                                        android.util.Log.e("MainActivity", "Error saving user message: ${e.message}")
+                                    }
+                            }
+                            
+                            // Store the user input before clearing it
+                            val userInputText = userInput
+                            
+                            // Clear the input field immediately
+                            userInput = ""
+                            
+                            // Show loading indicator
+                            val loadingMessage = ChatMessage(
+                                userId = "/users/${auth.currentUser?.uid}",
+                                role = "assistant",
+                                text = "Thinking...",
+                                timestamp = System.currentTimeMillis()
+                            )
+                            messages.add(loadingMessage)
+                            
+                            // Query AI for response
+                            coroutineScope.launch {
+                                try {
+                                    val response = viewModel.queryGroqLlama(userInputText, settingsManager.getSelectedModel())
+                                    
+                                    // Remove loading message
+                                    val loadingIndex = messages.indexOfLast { it.text == "Thinking..." }
+                                    if (loadingIndex != -1) {
+                                        messages.removeAt(loadingIndex)
+                                    }
+                                    
+                                    // Add AI response to messages
+                                    val aiMessage = ChatMessage(
+                                        userId = "/users/${auth.currentUser?.uid}",
+                                        role = "assistant",
+                                        text = response,
+                                        timestamp = System.currentTimeMillis()
+                                    )
+                                    messages.add(aiMessage)
+                                    
+                                    // Save AI response to Firestore
+                                    if (userId != null) {
+                                        val aiMessageData = hashMapOf(
+                                            "userId" to "/users/$userId",
+                                            "role" to "assistant",
+                                            "text" to response,
+                                            "timestamp" to Date()
+                                        )
+                                        
+                                        FirebaseFirestore.getInstance().collection("chat_history")
+                                            .add(aiMessageData)
+                                            .addOnSuccessListener {
+                                                android.util.Log.d("MainActivity", "AI response saved to Firestore with ID: ${it.id}")
+                                            }
+                                            .addOnFailureListener { e ->
+                                                android.util.Log.e("MainActivity", "Error saving AI response: ${e.message}")
+                                            }
+                                    }
+                                } catch (e: Exception) {
+                                    // Remove loading message
+                                    val loadingIndex = messages.indexOfLast { it.text == "Thinking..." }
+                                    if (loadingIndex != -1) {
+                                        messages.removeAt(loadingIndex)
+                                    }
+                                    
+                                    // Show error message
+                                    Toast.makeText(
+                                        context,
+                                        "Error: ${e.message}",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    
+                                    // Add error message to chat
+                                    messages.add(
+                                        ChatMessage(
+                                            userId = "/users/${auth.currentUser?.uid}",
+                                            role = "assistant",
+                                            text = "Sorry, I encountered an error. Please try again later.",
+                                            timestamp = System.currentTimeMillis()
+                                        )
+                                    )
+                                    
+                                    // Log the error
+                                    android.util.Log.e("MainActivity", "Error getting AI response: ${e.message}", e)
+                                }
+                            }
+                        } else {
+                            Toast.makeText(context, "Please enter a message", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onVoiceInputRequested = {
+                        if (isListening) {
+                            onVoiceInputStop()
+                        } else {
+                            onVoiceInputRequested()
+                        }
+                    },
+                    isListening = isListening,
+                    fontSize = currentFontSize
+                )
+            }
+        }
+    ) { innerPadding ->
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                ModalDrawerSheet(
+                    modifier = Modifier.width(300.dp),
+                    drawerContainerColor = MaterialTheme.colorScheme.surface,
+                    drawerContentColor = MaterialTheme.colorScheme.onSurface
+                ) {
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Drawer header
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Law Assist",
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = MaterialTheme.typography.titleLarge.fontSize * currentFontSize
+                            )
+                        )
+                    }
+
+                    Divider()
+
+                    // New chat button
+                    ListItem(
+                        headlineContent = {
+                            Text(
+                                "New Chat",
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontSize = MaterialTheme.typography.bodyLarge.fontSize * currentFontSize
+                                )
+                            )
+                        },
+                        leadingContent = {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "New Chat"
+                            )
+                        },
+                        modifier = Modifier.clickable {
+                            onNewChat()
+                            scope.launch {
+                                drawerState.close()
+                            }
+                        }
+                    )
+
+                    // Settings button
+                    ListItem(
+                        headlineContent = {
+                            Text(
+                                "Settings",
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontSize = MaterialTheme.typography.bodyLarge.fontSize * currentFontSize
+                                )
+                            )
+                        },
+                        leadingContent = {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Settings"
+                            )
+                        },
+                        modifier = Modifier.clickable {
+                            navController.navigate("settings")
+                            scope.launch {
+                                drawerState.close()
+                            }
+                        }
+                    )
+
+                    Divider()
+
+                    // Logout button
+                    ListItem(
+                        headlineContent = {
+                            Text(
+                                "Logout",
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontSize = MaterialTheme.typography.bodyLarge.fontSize * currentFontSize
+                                )
+                            )
+                        },
+                        leadingContent = {
+                            Icon(
+                                imageVector = Icons.Default.Logout,
+                                contentDescription = "Logout"
+                            )
+                        },
+                        modifier = Modifier.clickable {
                             auth.signOut()
-                            // Reset the AI state
-                            viewModel.resetResponseState()
-                            navController.navigate("login") {
+                            navController.navigate("welcome") {
                                 popUpTo(0)
                             }
                             Toast.makeText(context, "Logged out successfully", Toast.LENGTH_SHORT).show()
                         }
-                    ) {
-                        Text("Logout", color = Color.Red)
-                    }
-                }
-            )
-
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                LazyColumn(
-                    state = listState,
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(messages) { message -> ChatBubble(message) }
-                }
-
-                // Show listening indicator when active
-                if (isListening) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 80.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f))
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            "Listening...",
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
+                    )
                 }
             }
-
-            // Chat input bar with voice button
-            ChatInputBar(
-                userInput = userInput,
-                onUserInputChange = { userInput = it },
-                onMessageSent = {
-                    if (userInput.isNotEmpty()) {
-                        messages.add(ChatMessage(userInput, true))
-                        viewModel.queryGroqLlama(userInput)
-
-                        // Search for relevant laws based on user input
-                       // viewModel.searchLaws(userInput)
-
-                        userInput = ""
-                        coroutineScope.launch {
-                            listState.animateScrollToItem(messages.size - 1)
-                        }
-                    }
-                },
-                onVoiceInputRequested = {
-                    if (isListening) {
-                        onVoiceInputStop()
-                    } else {
-                        onVoiceInputRequested()
-                    }
-                },
-                isListening = isListening
-            )
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                state = listState,
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                items(messages) { message ->
+                    ChatBubble(
+                        message = message,
+                        onSpeakClicked = { text ->
+                            if (isSpeaking) {
+                                textToSpeechService.stop()
+                            } else {
+                                textToSpeechService.speak(text)
+                            }
+                        },
+                        isSpeaking = isSpeaking && message.role == "assistant",
+                        fontSize = currentFontSize
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-fun ChatBubble(message: ChatMessage) {
+fun ChatBubble(
+    message: ChatMessage,
+    onSpeakClicked: (String) -> Unit,
+    isSpeaking: Boolean,
+    fontSize: Float = 1.0f
+) {
+    val isUserMessage = message.role == "user"
+    val bubbleColor = if (isUserMessage) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.secondaryContainer
+    }
+
+    val textColor = if (isUserMessage) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    }
+
+    val alignment = if (isUserMessage) Alignment.End else Alignment.Start
+
     Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = if (message.isFromUser) Alignment.End else Alignment.Start
+        horizontalAlignment = alignment
     ) {
         Box(
             modifier = Modifier
@@ -345,22 +999,72 @@ fun ChatBubble(message: ChatMessage) {
                     RoundedCornerShape(
                         topStart = 16.dp,
                         topEnd = 16.dp,
-                        bottomStart = if (message.isFromUser) 16.dp else 4.dp,
-                        bottomEnd = if (message.isFromUser) 4.dp else 16.dp
+                        bottomStart = if (isUserMessage) 16.dp else 0.dp,
+                        bottomEnd = if (isUserMessage) 0.dp else 16.dp
                     )
                 )
-                .background(
-                    if (message.isFromUser) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.secondaryContainer
+                .background(bubbleColor)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(
+                        topStart = 16.dp,
+                        topEnd = 16.dp,
+                        bottomStart = if (isUserMessage) 16.dp else 0.dp,
+                        bottomEnd = if (isUserMessage) 0.dp else 16.dp
+                    )
                 )
-                .padding(vertical = 8.dp, horizontal = 12.dp)
+                .shadow(
+                    elevation = 2.dp,
+                    shape = RoundedCornerShape(
+                        topStart = 16.dp,
+                        topEnd = 16.dp,
+                        bottomStart = if (isUserMessage) 16.dp else 0.dp,
+                        bottomEnd = if (isUserMessage) 0.dp else 16.dp
+                    )
+                )
+                .padding(12.dp)
         ) {
-            Text(
-                text = message.content,
-                color = if (message.isFromUser) MaterialTheme.colorScheme.onPrimary
-                else MaterialTheme.colorScheme.onSecondaryContainer,
-                style = MaterialTheme.typography.bodyMedium
-            )
+            Column {
+                Text(
+                    text = message.text,
+                    color = textColor,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = MaterialTheme.typography.bodyLarge.fontSize * fontSize
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = formatTimestamp(message.timestamp),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = MaterialTheme.typography.bodySmall.fontSize * fontSize
+                        ),
+                        color = textColor.copy(alpha = 0.7f)
+                    )
+
+                    // Only show speak button for assistant messages
+                    if (!isUserMessage) {
+                        IconButton(
+                            onClick = { onSpeakClicked(message.text) },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isSpeaking) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp,
+                                contentDescription = if (isSpeaking) "Stop Speaking" else "Speak Message",
+                                tint = textColor.copy(alpha = 0.7f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -371,96 +1075,110 @@ fun ChatInputBar(
     onUserInputChange: (String) -> Unit,
     onMessageSent: () -> Unit,
     onVoiceInputRequested: () -> Unit,
-    isListening: Boolean = false
+    isListening: Boolean = false,
+    fontSize: Float = 1.0f
 ) {
     val focusRequester = remember { FocusRequester() }
+    val context = LocalContext.current
 
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        tonalElevation = 2.dp
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = 4.dp
+        )
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextField(
+            // Text input field
+            OutlinedTextField(
                 value = userInput,
                 onValueChange = onUserInputChange,
+                placeholder = {
+                    Text(
+                        "Type your message...",
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            fontSize = MaterialTheme.typography.bodyLarge.fontSize * fontSize
+                        )
+                    )
+                },
                 modifier = Modifier
                     .weight(1f)
                     .focusRequester(focusRequester),
-                placeholder = { Text("Type your question...") },
-                keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Send),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Send
+                ),
                 keyboardActions = KeyboardActions(
-                    onSend = {
-                        onMessageSent()
+                    onSend = { 
+                        if (userInput.isNotBlank()) {
+                            onMessageSent()
+                        } else {
+                            Toast.makeText(context, "Please enter a message", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 ),
                 shape = RoundedCornerShape(24.dp),
-                maxLines = 3,
-                trailingIcon = {
-                    Row {
-                        // Mic Button with changing icon and color based on listening state
-                        IconButton(
-                            onClick = { onVoiceInputRequested() }
-                        ) {
-                            Icon(
-                                imageVector = if (isListening) Icons.Outlined.MicOff else Icons.Outlined.Mic,
-                                contentDescription = if (isListening) "Stop Voice Input" else "Voice Input",
-                                tint = if (isListening)
-                                    MaterialTheme.colorScheme.error
-                                else
-                                    MaterialTheme.colorScheme.primary
-                            )
-                        }
-
-                        // Upload Button (sends the message)
-                        IconButton(
-                            onClick = { onMessageSent() },
-                            enabled = userInput.isNotEmpty()
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Upload,
-                                contentDescription = "Send Message",
-                                tint = if (userInput.isNotEmpty())
-                                    MaterialTheme.colorScheme.primary
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                            )
-                        }
-                    }
-                }
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                ),
+                maxLines = 5,
+                singleLine = false
             )
+
+            // Voice input button
+            IconButton(
+                onClick = onVoiceInputRequested,
+                modifier = Modifier
+                    .padding(4.dp)
+                    .size(56.dp) // Increased size
+                    .clip(CircleShape)
+                    .background(
+                        if (isListening) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.primary // Changed to primary color
+                    )
+            ) {
+                Icon(
+                    imageVector = if (isListening) Icons.Outlined.MicOff else Icons.Outlined.Mic,
+                    contentDescription = if (isListening) "Stop Voice Input" else "Start Voice Input",
+                    tint = if (isListening) MaterialTheme.colorScheme.onError
+                           else MaterialTheme.colorScheme.onPrimary // Changed to onPrimary
+                )
+            }
+
+            // Send button
+            IconButton(
+                onClick = { 
+                    if (userInput.isNotBlank()) {
+                        onMessageSent()
+                    } else {
+                        Toast.makeText(context, "Please enter a message", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier
+                    .padding(4.dp)
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Send,
+                    contentDescription = "Send Message",
+                    tint = MaterialTheme.colorScheme.onPrimary
+                )
+            }
         }
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun DefaultPreview() {
-    val context = LocalContext.current
-    val lawDao = LawDatabase.getDatabase(context).lawDao()
-    val lawRepository = LawRepository(lawDao)
-    val viewModel = LawViewModel(lawRepository)
-    val voiceViewModel = VoiceViewModel()
-    val navController = rememberNavController()
-    val previewInputState = remember { mutableStateOf("") }
-    val previewAuth = FirebaseAuth.getInstance()
-    val previewMessages = remember { mutableStateListOf<ChatMessage>() }
-
-    LawAssistTheme {
-        ModernChatScreen(
-            viewModel = viewModel,
-            voiceViewModel = voiceViewModel,
-            userInputState = previewInputState,
-            onVoiceInputRequested = { /* Preview only */ },
-            onVoiceInputStop = { /* Preview only */ },
-            navController = navController,
-            auth = previewAuth,
-            messages = previewMessages
-        )
     }
 }

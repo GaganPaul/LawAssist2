@@ -58,6 +58,11 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    
+    // Compose Animation
+    implementation("androidx.compose.animation:animation:1.5.4")
+    implementation("androidx.compose.animation:animation-core:1.5.4")
+    implementation("androidx.compose.animation:animation-graphics:1.5.4")
 
     // Testing
     testImplementation(libs.junit)

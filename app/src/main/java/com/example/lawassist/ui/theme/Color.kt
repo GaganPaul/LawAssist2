@@ -1,13 +1,59 @@
 package com.example.lawassist.ui.theme
 
 import androidx.compose.ui.graphics.Color
-/*
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+// Light Theme Colors
+val md_theme_light_primary = Color.White
+val md_theme_light_onPrimary = Color.Black
+val md_theme_light_primaryContainer = Color(0xFFF5F5F5)
+val md_theme_light_onPrimaryContainer = Color.Black
+val md_theme_light_secondary = Color.Black
+val md_theme_light_onSecondary = Color.White
+val md_theme_light_secondaryContainer = Color(0xFFE1E1E1)
+val md_theme_light_onSecondaryContainer = Color.Black
+val md_theme_light_tertiary = Color.Black
+val md_theme_light_onTertiary = Color.White
+val md_theme_light_tertiaryContainer = Color(0xFFE1E1E1)
+val md_theme_light_onTertiaryContainer = Color.Black
+val md_theme_light_error = Color(0xFFBA1A1A)
+val md_theme_light_errorContainer = Color(0xFFFFDAD6)
+val md_theme_light_onError = Color.White
+val md_theme_light_onErrorContainer = Color(0xFF410002)
+val md_theme_light_background = Color.White
+val md_theme_light_onBackground = Color.Black
+val md_theme_light_surface = Color.White
+val md_theme_light_onSurface = Color.Black
+val md_theme_light_surfaceVariant = Color(0xFFF5F5F5)
+val md_theme_light_onSurfaceVariant = Color.Black
+val md_theme_light_outline = Color.Gray
+val md_theme_light_inverseOnSurface = Color.White
+val md_theme_light_inverseSurface = Color.Black
+val md_theme_light_inversePrimary = Color.White
 
- */
+// Dark Theme Colors
+val md_theme_dark_primary = Color.Black
+val md_theme_dark_onPrimary = Color.White
+val md_theme_dark_primaryContainer = Color(0xFF2D2D2D)
+val md_theme_dark_onPrimaryContainer = Color.White
+val md_theme_dark_secondary = Color.Black
+val md_theme_dark_onSecondary = Color.White
+val md_theme_dark_secondaryContainer = Color(0xFF2D2D2D)
+val md_theme_dark_onSecondaryContainer = Color.White
+val md_theme_dark_tertiary = Color.Black
+val md_theme_dark_onTertiary = Color.White
+val md_theme_dark_tertiaryContainer = Color(0xFF2D2D2D)
+val md_theme_dark_onTertiaryContainer = Color.White
+val md_theme_dark_error = Color(0xFFBA1A1A)
+val md_theme_dark_errorContainer = Color(0xFFFFDAD6)
+val md_theme_dark_onError = Color.White
+val md_theme_dark_onErrorContainer = Color(0xFF410002)
+val md_theme_dark_background = Color(0xFF121212)
+val md_theme_dark_onBackground = Color.White
+val md_theme_dark_surface = Color(0xFF1D1D1D)
+val md_theme_dark_onSurface = Color.White
+val md_theme_dark_surfaceVariant = Color(0xFF2D2D2D)
+val md_theme_dark_onSurfaceVariant = Color.White
+val md_theme_dark_outline = Color.LightGray
+val md_theme_dark_inverseOnSurface = Color.Black
+val md_theme_dark_inverseSurface = Color.White
+val md_theme_dark_inversePrimary = Color.Black

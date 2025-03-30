@@ -6,11 +6,12 @@ import okhttp3.Request
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
 
     private const val BASE_URL = "https://api.groq.com/openai/v1/"
-    private const val API_KEY = "API_KEY" // 🔴 Replace with actual API key
+    private const val API_KEY = "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" // 🔴 Replace with actual API key
 
     // Ensure API key is set
     init {
@@ -35,7 +36,9 @@ object RetrofitClient {
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string()
                 println("API Error: ${response.code} - ${response.message}\nError Body: $errorBody")
-                throw Exception("API Error: ${response.code} - ${response.message}")
+                
+                // We don't throw here to allow Retrofit to handle the error response
+                // This ensures the error body is properly parsed
             }
 
             response
@@ -45,10 +48,13 @@ object RetrofitClient {
         }
     }
 
-    // Configure OkHttpClient with interceptors
+    // Configure OkHttpClient with interceptors and timeouts
     private val httpClient = OkHttpClient.Builder()
         .addInterceptor(authInterceptor)
         .addInterceptor(loggingInterceptor)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
     // Retrofit instance

@@ -31,8 +31,13 @@ class GroqRepository {
                 }
                 
                 val systemPrompt = """
-                You are LawAssist, an AI providing clear and concise legal information on Indian laws and schemes like Ayushman Bharat and Sugamya Bharat Abhiyan. 
-                Keep responses brief and actionable, using simple language.
+                  You are LawAssist, an AI assistant that provides quick, clear, and easy-to-understand answers about laws and government schemes and accessibility services in India.
+                    - Keep responses under 50 words.
+                    - Prioritize clarity and efficiency.
+                    - Mention key schemes like Ayushman Bharat and Sugamya Bharat Abhiyan.
+                    - Ensure responses are actionable and useful for Indian users.
+                    - Use simple language, avoiding unnecessary details.
+                    - If the user makes a spelling mistake, assume the correct spelling and respond accordingly.
                 """.trimIndent()
 
                 val requestBody = GroqRequest(
@@ -41,7 +46,7 @@ class GroqRepository {
                         Message(role = "system", content = systemPrompt),
                         Message(role = "user", content = prompt)
                     ),
-                    max_tokens = 300,
+                    max_tokens = 200,
                     temperature = 0.5,
                     top_p = 0.7
                 )

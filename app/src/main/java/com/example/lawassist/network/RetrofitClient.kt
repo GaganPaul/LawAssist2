@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit
 object RetrofitClient {
 
     private const val BASE_URL = "https://api.groq.com/openai/v1/"
-    private const val API_KEY = "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" // 🔴 Replace with actual API key
+    private const val API_KEY = "ADD_YOUR_API_KEY_HERE" // 🔴 Replace with actual API key
 
     // Ensure API key is set
     init {
